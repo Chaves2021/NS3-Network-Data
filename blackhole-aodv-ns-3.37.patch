@@ -1,0 +1,96 @@
+--- src/aodv/model/aodv-routing-protocol-backup.cc	2023-06-02 09:41:10.636379578 -0300
++++ src/aodv/model/aodv-routing-protocol.cc	2023-06-02 09:52:38.775695161 -0300
+@@ -336,7 +336,12 @@
+                           "Access to the underlying UniformRandomVariable",
+                           StringValue("ns3::UniformRandomVariable"),
+                           MakePointerAccessor(&RoutingProtocol::m_uniformRandomVariable),
+-                          MakePointerChecker<UniformRandomVariable>());
++                          MakePointerChecker<UniformRandomVariable>())
++	    .AddAttribute ("IsMalicious", "Is the node malicious",
++			   BooleanValue (false),
++			   MakeBooleanAccessor (&RoutingProtocol::SetMaliciousEnable,
++						&RoutingProtocol::GetMaliciousEnable),
++			   MakeBooleanChecker ());
+     return tid;
+ }
+ 
+@@ -654,6 +659,11 @@
+     Ipv4Address origin = header.GetSource();
+     m_routingTable.Purge();
+     RoutingTableEntry toDst;
++    if(IsMalicious)
++    {//When malicious node receives packet it drops the packet.
++        std :: cout <<"Launching Blackhole Attack! Packet dropped . . . \n";
++        return false;
++    }
+     if (m_routingTable.LookupRoute(dst, toDst))
+     {
+         if (toDst.GetFlag() == VALID)
+@@ -1464,7 +1474,7 @@
+      */
+     RoutingTableEntry toDst;
+     Ipv4Address dst = rreqHeader.GetDst();
+-    if (m_routingTable.LookupRoute(dst, toDst))
++    if (IsMalicious || m_routingTable.LookupRoute(dst, toDst))
+     {
+         /*
+          * Drop RREQ, This node RREP will make a loop.
+@@ -1482,13 +1492,23 @@
+          * the value received in the incoming RREQ is larger than the value currently maintained by
+          * the forwarding node.
+          */
+-        if ((rreqHeader.GetUnknownSeqno() ||
++        if (IsMalicious || ((rreqHeader.GetUnknownSeqno() ||
+              (int32_t(toDst.GetSeqNo()) - int32_t(rreqHeader.GetDstSeqno()) >= 0)) &&
+-            toDst.GetValidSeqNo())
++            toDst.GetValidSeqNo()))
+         {
+-            if (!rreqHeader.GetDestinationOnly() && toDst.GetFlag() == VALID)
++            if (IsMalicious || (!rreqHeader.GetDestinationOnly() && toDst.GetFlag() == VALID))
+             {
+                 m_routingTable.LookupRoute(origin, toOrigin);
++                if(IsMalicious)
++                {
++                    Ptr<NetDevice> dev = m_ipv4->GetNetDevice (m_ipv4->GetInterfaceForAddress (receiver));
++                    RoutingTableEntry falseToDst(dev,dst,true,rreqHeader.GetDstSeqno()+100,
++				    m_ipv4->GetAddress (m_ipv4->GetInterfaceForAddress(receiver),0),1,dst,m_activeRouteTimeout);
++
++                    SendReplyByIntermediateNode (falseToDst, toOrigin, rreqHeader.GetGratuitousRrep());
++                    return;
++                }
++
+                 SendReplyByIntermediateNode(toDst, toOrigin, rreqHeader.GetGratuitousRrep());
+                 return;
+             }
+@@ -1584,6 +1604,11 @@
+     /* If the node we received a RREQ for is a neighbor we are
+      * probably facing a unidirectional link... Better request a RREP-ack
+      */
++    if(IsMalicious)                       //Shalini Satre
++    {
++       rrepHeader.SetHopCount(1);
++    }
++
+     if (toDst.GetHop() == 1)
+     {
+         rrepHeader.SetAckRequired(true);
+--- src/aodv/model/aodv-routing-protocol-backup.h	2023-06-02 09:41:20.728483030 -0300
++++ src/aodv/model/aodv-routing-protocol.h	2023-06-02 09:50:16.230607662 -0300
+@@ -192,6 +192,8 @@
+     {
+         return m_enableBroadcast;
+     }
++    void SetMaliciousEnable (bool f) { IsMalicious = f; }
++    bool GetMaliciousEnable () const { return IsMalicious; }
+ 
+     /**
+      * Assign a fixed random variable stream number to the random variables
+@@ -291,6 +293,8 @@
+     uint16_t m_rreqCount;
+     /// Number of RERRs used for RERR rate control
+     uint16_t m_rerrCount;
++    /// Set node as malicious. Dropping every packet received.
++    bool IsMalicious;
+ 
+   private:
+     /// Start protocol operation
